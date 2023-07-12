@@ -28,3 +28,5 @@ Chinook_Sqlite.sql
 *.swo
 
 .node-version
+firebase-debug.log
+firestore-debug.log
