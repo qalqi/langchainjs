@@ -1,9 +1,12 @@
 import * as firebaseAdmin from "firebase-admin";
+import { getApps, initializeApp } from "firebase-admin/app";
+
 import {
   getFirestore,
   DocumentData,
   Firestore,
   DocumentReference,
+  FieldValue,
 } from "firebase-admin/firestore";
 import {
   StoredMessage,
@@ -19,6 +22,7 @@ export interface FirestoreDBChatMessageHistory {
   collectionName: string;
   sessionId: string;
   userId: string;
+  appIdx?: number;
   config?: firebaseAdmin.AppOptions;
 }
 export class FirestoreChatMessageHistory extends BaseListChatMessageHistory {
@@ -29,6 +33,8 @@ export class FirestoreChatMessageHistory extends BaseListChatMessageHistory {
   private sessionId: string;
 
   private userId: string;
+
+  private appIdx: number;
 
   private config: firebaseAdmin.AppOptions;
 
@@ -42,6 +48,7 @@ export class FirestoreChatMessageHistory extends BaseListChatMessageHistory {
     collectionName,
     sessionId,
     userId,
+    appIdx = 0,
     config,
   }: FirestoreDBChatMessageHistory) {
     super();
@@ -49,25 +56,28 @@ export class FirestoreChatMessageHistory extends BaseListChatMessageHistory {
     this.sessionId = sessionId;
     this.userId = userId;
     this.document = null;
+    this.appIdx = appIdx;
     this.messages = [];
     if (config) this.config = config;
 
-    this.prepareFirestore();
+    try {
+      this.prepareFirestore();
+    } catch (error) {
+      throw new Error(`Unknown response type`);
+    }
   }
 
   private prepareFirestore(): void {
-    try {
-      firebaseAdmin.app(); // Check if the app is already initialized
-    } catch (e) {
-      firebaseAdmin.initializeApp(this.config);
-    }
-    this.firestoreClient = getFirestore(firebaseAdmin.app());
+    let app;
+    // Check if the app is already initialized else get appIdx
+    if (!getApps().length) app = initializeApp(this.config);
+    else app = getApps()[this.appIdx];
+
+    this.firestoreClient = getFirestore(app);
+
     this.document = this.firestoreClient
       .collection(this.collectionName)
       .doc(this.sessionId);
-    this.getMessages().catch((err) => {
-      throw new Error(`Unknown response type: ${err.toString()}`);
-    });
   }
 
   async getMessages(): Promise<BaseMessage[]> {
@@ -75,48 +85,76 @@ export class FirestoreChatMessageHistory extends BaseListChatMessageHistory {
       throw new Error("Document not initialized");
     }
 
-    const doc = await this.document.get();
-    if (doc.exists) {
-      const data = doc.data();
-      if (data?.messages && data.messages.length > 0) {
-        this.messages = mapStoredMessagesToChatMessages(data.messages);
-      }
+    const querySnapshot = await this.document
+      .collection("messages")
+      .orderBy("createdAt", "asc")
+      .get()
+      .catch((err) => {
+        throw new Error(`Unknown response type: ${err.toString()}`);
+      });
+
+    const response: StoredMessage[] = [];
+    querySnapshot.forEach((doc) => {
+      const { type, data } = doc.data();
+      response.push({ type, data });
+    });
+
+    if (response.length > 0) {
+      this.messages = mapStoredMessagesToChatMessages(response);
     }
+
     return this.messages;
   }
 
   protected async addMessage(message: BaseMessage) {
     const messages = mapChatMessagesToStoredMessages([message]);
-
-    this.messages.push(message);
-    await this.upsertMessages(messages);
+    await this.upsertMessage(messages[0]);
   }
 
-  private upsertMessages(messages: StoredMessage[]): void {
+  private async upsertMessage(message: StoredMessage): Promise<void> {
     if (!this.document) {
       throw new Error("Document not initialized");
     }
-
+    await this.document.set(
+      {
+        id: this.sessionId,
+        user_id: this.userId,
+      },
+      { merge: true }
+    );
     this.document
-      .set(
-        {
-          id: this.sessionId,
-          user_id: this.userId,
-          messages: [...messages],
-        },
-        { merge: true }
-      )
+      .collection("messages")
+      .add({
+        type: message.type,
+        data: message.data,
+        createdBy: this.userId,
+        createdAt: FieldValue.serverTimestamp(),
+      })
       .catch((err) => {
         throw new Error(`Unknown response type: ${err.toString()}`);
       });
   }
 
-  public clear(): void {
+  public async clear(): Promise<void> {
     this.messages = [];
-    if (this.document) {
-      this.document.delete().catch((err) => {
+    if (!this.document) {
+      throw new Error("Document not initialized");
+    }
+    await this.document
+      .collection("messages")
+      .get()
+      .then((querySnapshot) => {
+        querySnapshot.docs.forEach((snapshot) => {
+          snapshot.ref.delete().catch((err) => {
+            throw new Error(`Unknown response type: ${err.toString()}`);
+          });
+        });
+      })
+      .catch((err) => {
         throw new Error(`Unknown response type: ${err.toString()}`);
       });
-    }
+    await this.document.delete().catch((err) => {
+      throw new Error(`Unknown response type: ${err.toString()}`);
+    });
   }
 }

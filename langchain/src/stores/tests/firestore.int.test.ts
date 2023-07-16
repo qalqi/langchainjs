@@ -2,24 +2,23 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { test, expect } from "@jest/globals";
 
-import { DynamoDBChatMessageHistory } from "../message/dynamodb.js";
+import { FirestoreChatMessageHistory } from "../message/firestore.js";
 import { ChatOpenAI } from "../../chat_models/openai.js";
 import { ConversationChain } from "../../chains/conversation.js";
 import { BufferMemory } from "../../memory/buffer_memory.js";
 import { HumanMessage, AIMessage } from "../../schema/index.js";
 
-test("Test DynamoDB message history store", async () => {
-  const sessionId = new Date().toISOString();
-  const messageHistory = new DynamoDBChatMessageHistory({
-    tableName: "langchain",
+const sessionId = Date.now().toString();
+
+// firebase emulators:start --only firestore --project your-project-id
+// FIRESTORE_EMULATOR_HOST="localhost:8080" yarn test:single -- firestore.int.test.ts
+
+test("Test firestore message history store", async () => {
+  const messageHistory = new FirestoreChatMessageHistory({
+    collectionName: "langchain",
     sessionId,
-    config: {
-      region: process.env.AWS_REGION!,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-      },
-    },
+    userId: "a@example.com",
+    config: { projectId: "your-project-id" },
   });
 
   await messageHistory.addUserMessage("My name's Jonas");
@@ -34,16 +33,11 @@ test("Test DynamoDB message history store", async () => {
 
   expect(await messageHistory.getMessages()).toEqual(expectedMessages);
 
-  const messageHistory2 = new DynamoDBChatMessageHistory({
-    tableName: "langchain",
+  const messageHistory2 = new FirestoreChatMessageHistory({
+    collectionName: "langchain",
     sessionId,
-    config: {
-      region: process.env.AWS_REGION!,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-      },
-    },
+    userId: "a@example.com",
+    config: { projectId: "your-project-id" },
   });
 
   expect(await messageHistory2.getMessages()).toEqual(expectedMessages);
@@ -53,19 +47,14 @@ test("Test DynamoDB message history store", async () => {
   expect(await messageHistory.getMessages()).toEqual([]);
 });
 
-test("Test DynamoDB message history store in a BufferMemory", async () => {
+test("Test firestore message history store in a BufferMemory", async () => {
   const memory = new BufferMemory({
     returnMessages: true,
-    chatHistory: new DynamoDBChatMessageHistory({
-      tableName: "langchain",
-      sessionId: new Date().toISOString(),
-      config: {
-        region: process.env.AWS_REGION!,
-        credentials: {
-          accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-        },
-      },
+    chatHistory: new FirestoreChatMessageHistory({
+      collectionName: "langchain",
+      sessionId: "BufferMemory",
+      userId: "a@example.com",
+      config: { projectId: "your-project-id" },
     }),
   });
   await memory.saveContext(
@@ -79,20 +68,17 @@ test("Test DynamoDB message history store in a BufferMemory", async () => {
       new AIMessage("Nice to meet you, Jonas!"),
     ],
   });
+  await memory.clear();
+  expect(await memory.loadMemoryVariables({})).toEqual({ history: [] });
 });
 
-test("Test DynamoDB message history store in an LLM chain", async () => {
+test("Test firestore message history store in an LLM chain", async () => {
   const memory = new BufferMemory({
-    chatHistory: new DynamoDBChatMessageHistory({
-      tableName: "langchain",
-      sessionId: new Date().toISOString(),
-      config: {
-        region: process.env.AWS_REGION!,
-        credentials: {
-          accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-        },
-      },
+    chatHistory: new FirestoreChatMessageHistory({
+      collectionName: "langchain",
+      sessionId: "LLMChain",
+      userId: "a@example.com",
+      config: { projectId: "your-project-id" },
     }),
   });
 
@@ -103,5 +89,6 @@ test("Test DynamoDB message history store in an LLM chain", async () => {
   console.log({ res1 });
 
   const res2 = await chain.call({ input: "What did I just say my name was?" });
-  console.log({ res2 });
+
+  expect(res2.response.toLowerCase().includes("jim")).toEqual(true);
 });
